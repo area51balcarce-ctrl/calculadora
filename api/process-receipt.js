@@ -2,20 +2,12 @@ import formidable from 'formidable';
 import fs from 'fs';
 import pdfParse from 'pdf-parse';
 
-export const config = {
-  api: {
-    bodyParser: false
-  }
-};
+export const config = { api: { bodyParser: false } };
 
-const VERSION = 'formula-exacta-v5';
+const VERSION = 'formula-exacta-v6-totales-globales';
 
 function round2(n) {
   return Math.round((Number(n) + Number.EPSILON) * 100) / 100;
-}
-
-function cleanLine(line) {
-  return String(line || '').replace(/\s+/g, ' ').trim();
 }
 
 function normalizeText(text) {
@@ -25,16 +17,6 @@ function normalizeText(text) {
     .replace(/\n{2,}/g, '\n')
     .trim();
 }
-
-/*
-  Lee importes completos:
-  2209997.65
-  2.209.997,65
-  2,209,997.65
-  898,382.79
-  898.382,79
-*/
-const MONEY_REGEX = /-?\$?\s*\d[\d.,]*[.,]\d{2}/g;
 
 function parseMoney(raw) {
   if (!raw) return 0;
@@ -49,14 +31,11 @@ function parseMoney(raw) {
 
   if (lastComma >= 0 && lastDot >= 0) {
     if (lastComma > lastDot) {
-      // 2.209.997,65
       s = s.replace(/\./g, '').replace(',', '.');
     } else {
-      // 2,209,997.65
       s = s.replace(/,/g, '');
     }
   } else if (lastComma >= 0) {
-    // 2209997,65
     s = s.replace(',', '.');
   }
 
@@ -64,212 +43,110 @@ function parseMoney(raw) {
   return Number.isFinite(n) ? n : 0;
 }
 
-function moneyValues(line) {
-  const text = String(line || '');
-  const values = [];
+const MONEY_REGEX = /-?\$?\s*\d[\d.,]*[.,]\d{2}/g;
 
-  for (const match of text.matchAll(MONEY_REGEX)) {
+function moneyMatches(text) {
+  const source = String(text || '');
+  const result = [];
+
+  for (const match of source.matchAll(MONEY_REGEX)) {
     const raw = match[0];
-    const start = match.index || 0;
-    const end = start + raw.length;
+    const index = match.index || 0;
+    const end = index + raw.length;
 
-    // Evita capturar pedazos dentro de números largos.
-    const before = text[start - 1] || '';
-    const after = text[end] || '';
+    const before = source[index - 1] || '';
+    const after = source[end] || '';
+
+    // No capturar pedazos dentro de números largos.
     if (/[\d.,]/.test(before) || /[\d.,]/.test(after)) continue;
 
     const value = parseMoney(raw);
-    if (Number.isFinite(value)) values.push(value);
-  }
-
-  return values;
-}
-
-function isOnlyMoney(line) {
-  return /^-?\$?\s*\d[\d.,]*[.,]\d{2}$/.test(cleanLine(line));
-}
-
-function lastMoney(line) {
-  const values = moneyValues(line);
-  return values.length ? values[values.length - 1] : 0;
-}
-
-function findLineIndex(lines, regex) {
-  return lines.findIndex(line => regex.test(line));
-}
-
-function amountNearLine(lines, index, minAmount = 100) {
-  if (index < 0) return 0;
-
-  for (let i = index; i <= Math.min(index + 4, lines.length - 1); i++) {
-    const values = moneyValues(lines[i]).filter(value => value >= minAmount);
-    if (values.length) return round2(values[values.length - 1]);
-  }
-
-  return 0;
-}
-
-/*
-  Busca fila de totales aunque el PDF la extraiga en una sola línea:
-  2209997.65 1202135.41 2095517.06
-
-  O aunque la extraiga en 3 líneas consecutivas:
-  2209997.65
-  1202135.41
-  2095517.06
-*/
-function findTotalsRow(lines) {
-  let best = null;
-
-  // Caso 1: los 3 totales en una misma línea.
-  for (const line of lines) {
-    const values = moneyValues(line);
-    if (values.length >= 3) {
-      const [haberesConAporte, haberesSinAporte, totalDescuentos] = values.slice(-3);
-
-      if (haberesConAporte > 100000 && totalDescuentos > 10000) {
-        best = {
-          haberesConAporte: round2(haberesConAporte),
-          haberesSinAporte: round2(haberesSinAporte),
-          totalDescuentos: round2(totalDescuentos),
-          raw: line
-        };
-      }
+    if (Number.isFinite(value)) {
+      result.push({ raw, value: round2(value), index });
     }
   }
 
-  // Caso 2: los 3 totales en 3 líneas consecutivas.
-  for (let i = 0; i <= lines.length - 3; i++) {
-    if (!isOnlyMoney(lines[i]) || !isOnlyMoney(lines[i + 1]) || !isOnlyMoney(lines[i + 2])) continue;
+  return result;
+}
 
-    const haberesConAporte = moneyValues(lines[i])[0];
-    const haberesSinAporte = moneyValues(lines[i + 1])[0];
-    const totalDescuentos = moneyValues(lines[i + 2])[0];
+function firstAmountAfter(text, labelRegex, maxChars = 220) {
+  const match = labelRegex.exec(text);
+  if (!match) return 0;
+
+  const start = match.index + match[0].length;
+  const slice = text.slice(start, start + maxChars);
+  const amounts = moneyMatches(slice).map(item => item.value).filter(v => v > 0);
+
+  return amounts.length ? round2(amounts[0]) : 0;
+}
+
+function findTotalsRowGlobal(text) {
+  const sonPesosIndex = text.search(/son\s+pesos/i);
+  const searchText = sonPesosIndex >= 0 ? text.slice(0, sonPesosIndex) : text;
+  const amounts = moneyMatches(searchText)
+    .map(item => item.value)
+    .filter(v => v > 0);
+
+  // En estos recibos, justo antes de "Son Pesos" están:
+  // Total Hab. c/Ap. | Total Hab. s/Ap. | Total Desc.
+  if (amounts.length >= 3) {
+    const [haberesConAporte, haberesSinAporte, totalDescuentos] = amounts.slice(-3);
 
     if (haberesConAporte > 100000 && totalDescuentos > 10000) {
-      best = {
+      return {
         haberesConAporte: round2(haberesConAporte),
         haberesSinAporte: round2(haberesSinAporte),
-        totalDescuentos: round2(totalDescuentos),
-        raw: `${lines[i]} | ${lines[i + 1]} | ${lines[i + 2]}`
+        totalDescuentos: round2(totalDescuentos)
       };
     }
   }
 
-  return best;
+  return null;
 }
 
-function findHaberesConAporte(lines) {
-  const totals = findTotalsRow(lines);
-  if (totals && totals.haberesConAporte > 0) return totals.haberesConAporte;
+function fallbackHaberes(text) {
+  const ipsIndex = text.search(/i\.?\s*p\.?\s*s|ips\s*14/i);
+  if (ipsIndex <= 0) return 0;
 
-  const ipsIndex = findLineIndex(lines, /i\.?\s*p\.?\s*s|ips\s*14/i);
+  const beforeIps = text.slice(0, ipsIndex);
+  const conceptRegex = /(SUELDO BASICO|SUELDO BÁSICO|JORNADA PROLONGADA|ANTIGÜEDAD|REFRIGERIO|HORARIO NOCTURNO)/gi;
 
-  if (ipsIndex > 0) {
-    let sum = 0;
+  let total = 0;
+  let match;
 
-    for (let i = 0; i < ipsIndex; i++) {
-      const line = lines[i];
-
-      // Solo conceptos que van a Hab. c/Ap. según este formato de recibo.
-      if (/sueldo|basico|básico|jornada|antig[uü]edad|refrigerio|horario/i.test(line)) {
-        const amount = amountNearLine(lines, i, 100);
-        if (amount > 0) sum += amount;
-      }
-    }
-
-    if (sum > 0) return round2(sum);
+  while ((match = conceptRegex.exec(beforeIps)) !== null) {
+    const amount = firstAmountAfter(beforeIps.slice(match.index), /(?:SUELDO BASICO|SUELDO BÁSICO|JORNADA PROLONGADA|ANTIGÜEDAD|REFRIGERIO|HORARIO NOCTURNO)/i, 120);
+    if (amount > 0) total += amount;
   }
 
-  return 0;
-}
-
-function extractIoma(lines) {
-  const index = findLineIndex(lines, /i\.?\s*o\.?\s*m\.?\s*a|ioma/i);
-  return {
-    index,
-    amount: round2(amountNearLine(lines, index, 100))
-  };
-}
-
-function extractIps(lines) {
-  const index = findLineIndex(lines, /i\.?\s*p\.?\s*s|ips\s*14/i);
-  return round2(amountNearLine(lines, index, 100));
-}
-
-function stopLine(line) {
-  return /(son\s+pesos|liquido\s+a\s+pagar|líquido\s+a\s+pagar|neto\s+a\s+cobrar|neto|liquido|líquido|firma|recibi|recibí|banco|cuenta|cbu)/i.test(line);
-}
-
-function conceptItem(line) {
-  const values = moneyValues(line);
-  if (!values.length) return null;
-
-  const amount = round2(values[values.length - 1]);
-  const concept = cleanLine(String(line).replace(MONEY_REGEX, '').trim());
-
-  if (!concept || amount <= 0) return null;
-  return { concept, amount, raw: line };
-}
-
-function ignoreConcept(concept) {
-  return /(hab\.?\s*c\/ap|haberes?|i\.?\s*p\.?\s*s|ips|i\.?\s*o\.?\s*m\.?\s*a|ioma|neto|liquido|líquido|total|totales|son\s+pesos)/i.test(concept);
-}
-
-function discountsBelowIomaByLines(lines, iomaIndex) {
-  if (iomaIndex < 0) return [];
-
-  const out = [];
-
-  for (let i = iomaIndex + 1; i < lines.length; i++) {
-    const line = cleanLine(lines[i]);
-    if (!line) continue;
-    if (stopLine(line)) break;
-
-    const item = conceptItem(line);
-    if (!item) continue;
-    if (ignoreConcept(item.concept)) continue;
-
-    out.push(item);
-  }
-
-  return out;
+  return round2(total);
 }
 
 function calculateFromText(rawText) {
   const text = normalizeText(rawText);
-  const lines = text.split('\n').map(cleanLine).filter(Boolean);
 
-  const totalsRow = findTotalsRow(lines);
+  const totals = findTotalsRowGlobal(text);
 
-  const haberes = round2(findHaberesConAporte(lines));
-  const ips = round2(extractIps(lines));
-  const iomaData = extractIoma(lines);
-  const ioma = round2(iomaData.amount);
+  const haberes = totals?.haberesConAporte || fallbackHaberes(text);
 
-  const byLineDiscounts = discountsBelowIomaByLines(lines, iomaData.index);
-  const totalByLines = round2(byLineDiscounts.reduce((acc, item) => acc + item.amount, 0));
+  const ips = firstAmountAfter(text, /i\.?\s*p\.?\s*s\.?\s*14\s*%?|ips\s*14\s*%?/i, 180);
+  const ioma = firstAmountAfter(text, /i\.?\s*o\.?\s*m\.?\s*a\.?\s*4,?8\s*%?|ioma\s*4,?8\s*%?/i, 180);
 
-  let descuentosDebajoIoma = totalByLines;
-  let fuenteDescuentos = 'lineas_debajo_ioma';
+  const totalDescuentosRecibo = totals?.totalDescuentos || 0;
 
-  /*
-    Regla blindada para recibos con fila de totales:
-    Descuentos debajo de IOMA = total columna Desc. - IPS - IOMA
-  */
-  if (totalsRow && totalsRow.totalDescuentos > 0 && ips > 0 && ioma > 0) {
-    const calculated = round2(totalsRow.totalDescuentos - ips - ioma);
-    if (calculated >= 0) {
-      descuentosDebajoIoma = calculated;
-      fuenteDescuentos = 'total_descuentos_recibo_menos_ips_ioma';
-    }
+  let descuentosDebajoIoma = 0;
+  let fuenteDescuentos = 'sin_total_descuentos';
+
+  if (totalDescuentosRecibo > 0 && ips > 0 && ioma > 0) {
+    descuentosDebajoIoma = round2(totalDescuentosRecibo - ips - ioma);
+    fuenteDescuentos = 'total_descuentos_recibo_menos_ips_ioma';
   }
 
   const resultadoX = round2(haberes - ips - ioma);
   const base75 = round2(resultadoX * 0.75);
   const cupoFinal = round2(base75 - descuentosDebajoIoma);
 
-  const manualReview = !haberes || !ips || !ioma || !totalsRow;
+  const manualReview = !totals || !haberes || !ips || !ioma || !totalDescuentosRecibo;
 
   return {
     success: true,
@@ -283,18 +160,16 @@ function calculateFromText(rawText) {
       version: VERSION,
       formula: '((Hab. c/Ap. - IPS - IOMA) * 0.75) - (Total descuentos recibo - IPS - IOMA)',
       fuente_descuentos: fuenteDescuentos,
-      totals_row: totalsRow,
+      totals_row: totals,
       resumen: {
-        haberes,
-        ips,
-        ioma,
+        haberes: round2(haberes),
+        ips: round2(ips),
+        ioma: round2(ioma),
         resultado_x: resultadoX,
         base_75: base75,
         total_descuentos: descuentosDebajoIoma,
-        total_descuentos_recibo: totalsRow ? totalsRow.totalDescuentos : 0
-      },
-      descuentos_detectados_por_linea: byLineDiscounts,
-      lineas_cercanas_ioma: lines.slice(Math.max(0, iomaData.index - 4), Math.min(lines.length, iomaData.index + 18))
+        total_descuentos_recibo: totalDescuentosRecibo
+      }
     }
   };
 }
