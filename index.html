@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Servicios Integrales | Cupo Interno</title>
+  <style>
+    :root {
+      --bg: #f3f7f3;
+      --card: #ffffff;
+      --text: #000000;
+      --line: #cfe4d3;
+      --brand: #24a159;
+      --brand-dark: #0f5132;
+      --ok: #0f7a3d;
+      --warn: #9a6700;
+      --danger: #b42318;
+      --shadow: 0 16px 40px rgba(17, 24, 39, .10);
+      --radius: 22px;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: Arial, Helvetica, sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at top right, rgba(36,161,89,.08), transparent 25%),
+        linear-gradient(180deg, #f4fbf6 0%, var(--bg) 45%, #edf6ef 100%);
+    }
+
+    .wrap {
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+    }
+
+    .card {
+      width: 100%;
+      max-width: 760px;
+      background: var(--card);
+      border: 1px solid rgba(36, 161, 89, .10);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .header {
+      padding: 30px;
+      background: linear-gradient(135deg, #27ae60 0%, #157347 100%);
+      color: #fff;
+    }
+
+    .badge {
+      display: inline-flex;
+      border-radius: 999px;
+      padding: 8px 14px;
+      font-weight: 700;
+      font-size: 13px;
+      background: rgba(255,255,255,.18);
+      border: 1px solid rgba(255,255,255,.25);
+      margin-bottom: 14px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(30px, 4vw, 44px);
+      line-height: 1.08;
+    }
+
+    .header p {
+      margin: 12px 0 0;
+      font-size: 16px;
+      line-height: 1.55;
+      color: rgba(255,255,255,.96);
+    }
+
+    .box {
+      padding: 28px;
+      display: grid;
+      gap: 18px;
+    }
+
+    .upload {
+      border: 2px dashed #9dd8b5;
+      background: #f4fff8;
+      border-radius: 18px;
+      padding: 20px;
+    }
+
+    .upload strong {
+      display: block;
+      margin-bottom: 6px;
+      font-size: 16px;
+      color: #000;
+    }
+
+    .upload p {
+      margin: 0 0 12px;
+      font-size: 13px;
+      color: #39463b;
+      line-height: 1.5;
+    }
+
+    input[type="file"] {
+      width: 100%;
+      padding: 12px;
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      font-size: 15px;
+    }
+
+    .alert {
+      display: none;
+      border-radius: 16px;
+      padding: 14px 16px;
+      font-size: 14px;
+      line-height: 1.5;
+      font-weight: 700;
+    }
+
+    .alert.show { display: block; }
+    .alert.ok { background: #ebfff3; color: var(--ok); border: 1px solid #b6e7c7; }
+    .alert.warn { background: #fff8e8; color: var(--warn); border: 1px solid #f2d48a; }
+    .alert.error { background: #fff3f3; color: var(--danger); border: 1px solid #f1c0c0; }
+
+    .result {
+      border: 1px solid #cfe9d9;
+      background: linear-gradient(180deg, #effcf4 0%, #dcf7e7 100%);
+      border-radius: 20px;
+      padding: 22px;
+      display: none;
+      gap: 10px;
+    }
+
+    .result.show { display: grid; }
+
+    .result small {
+      color: #35513d;
+      font-size: 12px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: .8px;
+    }
+
+    .result-value {
+      font-size: clamp(42px, 6vw, 64px);
+      font-weight: 900;
+      line-height: 1;
+      color: var(--brand-dark);
+    }
+
+    .result-note {
+      color: #2f4c37;
+      line-height: 1.5;
+      font-size: 14px;
+    }
+
+    .result.negative {
+      border: 1px solid rgba(180, 35, 24, .24);
+      background: linear-gradient(180deg, #fff1f1 0%, #ffe7e7 100%);
+    }
+
+    .result.negative .result-value,
+    .result.negative small,
+    .result.negative .result-note {
+      color: var(--danger);
+    }
+
+    .meta {
+      display: grid;
+      gap: 8px;
+      margin-top: 8px;
+      font-size: 14px;
+      color: #223727;
+    }
+
+    button {
+      border: none;
+      border-radius: 18px;
+      padding: 17px 18px;
+      font-size: 17px;
+      font-weight: 900;
+      cursor: pointer;
+      background: var(--brand);
+      color: #fff;
+      box-shadow: 0 12px 22px rgba(36,161,89,.24);
+      transition: .15s ease;
+    }
+
+    button:hover { background: var(--brand-dark); transform: translateY(-1px); }
+    button:disabled { opacity: .7; cursor: wait; transform: none; }
+
+    .footer {
+      color: #415344;
+      font-size: 12px;
+      line-height: 1.55;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <main class="card">
+      <section class="header">
+        <div class="badge">SERVICIOS INTEGRALES · Uso interno</div>
+        <h1>Calculadora interna de cupo</h1>
+        <p>Cargá el recibo original en PDF y obtené solamente el cupo final. Sin WhatsApp, sin datos de cliente, sin pasos extra.</p>
+      </section>
+
+      <section class="box">
+        <div class="upload">
+          <strong>Adjuntar recibo de sueldo</strong>
+          <p>Solo PDF original. No fotos, capturas ni escaneos.</p>
+          <input id="reciboPdf" type="file" accept="application/pdf,.pdf" />
+        </div>
+
+        <button type="button" id="btnCalcular">Calcular cupo</button>
+
+        <div id="alertBox" class="alert"></div>
+
+        <div id="resultCard" class="result">
+          <small>Cupo final</small>
+          <div class="result-value" id="cupoFinal">$ 0,00</div>
+          <div class="result-note" id="resultNote">Resultado calculado sobre el PDF cargado.</div>
+          <div class="meta" id="resultMeta"></div>
+        </div>
+
+        <div class="footer">
+          Si el cálculo queda en rojo, el cupo es 0 o negativo. Revisar manualmente si corresponde renovar, refinanciar o derivar por otra empresa.
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const API_ENDPOINT = '/api/process-receipt';
+
+    const pdfInput = document.getElementById('reciboPdf');
+    const btnCalcular = document.getElementById('btnCalcular');
+    const alertBox = document.getElementById('alertBox');
+    const resultCard = document.getElementById('resultCard');
+    const cupoFinalEl = document.getElementById('cupoFinal');
+    const resultNoteEl = document.getElementById('resultNote');
+    const resultMetaEl = document.getElementById('resultMeta');
+
+    const money = new Intl.NumberFormat('es-AR', {
+      style: 'currency',
+      currency: 'ARS',
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2
+    });
+
+    function showAlert(type, message) {
+      alertBox.className = `alert show ${type}`;
+      alertBox.textContent = message;
+    }
+
+    function clearAlert() {
+      alertBox.className = 'alert';
+      alertBox.textContent = '';
+    }
+
+    function resetResult() {
+      resultCard.classList.remove('show', 'negative');
+      cupoFinalEl.textContent = money.format(0);
+      resultNoteEl.textContent = 'Resultado calculado sobre el PDF cargado.';
+      resultMetaEl.innerHTML = '';
+    }
+
+    function validarPDF() {
+      const file = pdfInput.files[0];
+
+      if (!file) {
+        showAlert('error', 'Adjuntá un recibo de sueldo en PDF.');
+        return false;
+      }
+
+      const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+      if (!isPdf) {
+        showAlert('error', 'Solo se aceptan archivos PDF reales.');
+        return false;
+      }
+
+      clearAlert();
+      return true;
+    }
+
+    async function calcularCupo() {
+      if (!validarPDF()) return;
+
+      btnCalcular.disabled = true;
+      btnCalcular.textContent = 'Analizando PDF...';
+      showAlert('warn', 'Analizando recibo...');
+      resetResult();
+
+      const data = new FormData();
+      data.append('recibo_pdf', pdfInput.files[0]);
+
+      try {
+        const response = await fetch(API_ENDPOINT, {
+          method: 'POST',
+          body: data
+        });
+
+        const result = await response.json();
+
+        if (!response.ok || !result.success) {
+          throw new Error(result.message || 'No se pudo analizar el recibo.');
+        }
+
+        const cupo = Number(result.cupo_final || 0);
+
+        resultCard.classList.add('show');
+        cupoFinalEl.textContent = money.format(cupo);
+
+        if (cupo <= 0) {
+          resultCard.classList.add('negative');
+          resultNoteEl.textContent = 'Cupo 0 o negativo. Revisar manualmente.';
+        } else {
+          resultCard.classList.remove('negative');
+          resultNoteEl.textContent = 'Cupo positivo calculado correctamente.';
+        }
+
+        if (result.debug && result.debug.resumen) {
+          resultMetaEl.innerHTML = `
+            <div><strong>Hab. c/Ap.:</strong> ${money.format(result.debug.resumen.haberes || 0)}</div>
+            <div><strong>IPS:</strong> ${money.format(result.debug.resumen.ips || 0)}</div>
+            <div><strong>IOMA:</strong> ${money.format(result.debug.resumen.ioma || 0)}</div>
+            <div><strong>Total descuentos debajo de IOMA:</strong> ${money.format(result.debug.resumen.total_descuentos || 0)}</div>
+          `;
+        }
+
+        showAlert('ok', result.message || 'Cupo calculado correctamente.');
+      } catch (error) {
+        showAlert('error', error.message || 'No se pudo analizar el PDF.');
+      } finally {
+        btnCalcular.disabled = false;
+        btnCalcular.textContent = 'Calcular cupo';
+      }
+    }
+
+    pdfInput.addEventListener('change', () => {
+      clearAlert();
+      resetResult();
+    });
+
+    btnCalcular.addEventListener('click', calcularCupo);
+
+    resetResult();
+  </script>
+</body>
+</html>
