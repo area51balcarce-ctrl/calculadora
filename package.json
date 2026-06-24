@@ -1,0 +1,16 @@
+{
+  "name": "servicios-integrales-cupo",
+  "version": "1.0.10",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vercel dev"
+  },
+  "dependencies": {
+    "formidable": "^3.5.2",
+    "pdf-parse": "^1.1.1"
+  },
+  "devDependencies": {
+    "vercel": "^37.0.0"
+  }
+}
