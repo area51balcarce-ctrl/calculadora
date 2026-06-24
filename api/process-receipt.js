@@ -1,29 +1,27 @@
 import formidable from 'formidable';
 import fs from 'fs';
-import pdfParse from 'pdf-parse';
+import { PdfReader } from 'pdfreader';
 
-export const config = { api: { bodyParser: false } };
+export const config = {
+  api: {
+    bodyParser: false
+  }
+};
 
-const VERSION = 'pdf-robusto-v7';
+const VERSION = 'pdfreader-layout-v8';
 
-function round2(n) {
-  return Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+function round2(value) {
+  return Math.round((Number(value) + Number.EPSILON) * 100) / 100;
 }
 
-function clean(line) {
-  return String(line || '').replace(/\s+/g, ' ').trim();
-}
-
-function normalize(text) {
-  return String(text || '')
-    .replace(/\r/g, '\n')
-    .replace(/[ \t]+/g, ' ')
-    .replace(/\n{2,}/g, '\n')
-    .trim();
-}
-
-const MONEY_REGEX = /-?\$?\s*\d[\d.,]*[.,]\d{2}/g;
-
+/**
+ * Lee importes en estos formatos:
+ * 2.209.997,65
+ * 2209997.65
+ * 2,209,997.65
+ * 898,382.79
+ * 898.382,79
+ */
 function parseMoney(raw) {
   if (!raw) return 0;
 
@@ -37,13 +35,14 @@ function parseMoney(raw) {
 
   if (lastComma >= 0 && lastDot >= 0) {
     if (lastComma > lastDot) {
-      // 2.209.997,65
+      // Formato argentino: 2.209.997,65
       s = s.replace(/\./g, '').replace(',', '.');
     } else {
-      // 2,209,997.65 / 898,382.79
+      // Formato inglés que sale de algunos PDFs: 2,209,997.65
       s = s.replace(/,/g, '');
     }
   } else if (lastComma >= 0) {
+    // 2209997,65
     s = s.replace(',', '.');
   }
 
@@ -51,15 +50,16 @@ function parseMoney(raw) {
   return Number.isFinite(n) ? n : 0;
 }
 
+const MONEY_REGEX = /-?\$?\s*\d[\d.,]*[.,]\d{2}/g;
+
 function moneyValues(text) {
   const src = String(text || '');
-  const out = [];
+  const values = [];
 
   for (const match of src.matchAll(MONEY_REGEX)) {
     const raw = match[0];
     const start = match.index || 0;
     const end = start + raw.length;
-
     const before = src[start - 1] || '';
     const after = src[end] || '';
 
@@ -67,68 +67,107 @@ function moneyValues(text) {
     if (/[\d.,]/.test(before) || /[\d.,]/.test(after)) continue;
 
     const value = parseMoney(raw);
-    if (Number.isFinite(value)) out.push(value);
+    if (Number.isFinite(value)) values.push(value);
   }
 
-  return out;
+  return values;
 }
 
-function lastMoney(line) {
-  const values = moneyValues(line);
+function lastMoney(text) {
+  const values = moneyValues(text);
   return values.length ? values[values.length - 1] : 0;
+}
+
+function cleanText(text) {
+  return String(text || '').replace(/\s+/g, ' ').trim();
+}
+
+async function extractRowsFromPdf(buffer) {
+  return await new Promise((resolve, reject) => {
+    const rows = new Map();
+
+    new PdfReader().parseBuffer(buffer, (err, item) => {
+      if (err) {
+        reject(err);
+        return;
+      }
+
+      if (!item) {
+        const result = [...rows.values()]
+          .sort((a, b) => {
+            if (a.page !== b.page) return a.page - b.page;
+            return a.y - b.y;
+          })
+          .map(row => {
+            row.items.sort((a, b) => a.x - b.x);
+            return row.items.map(i => i.text).join(' ').replace(/\s+/g, ' ').trim();
+          })
+          .filter(Boolean);
+
+        resolve(result);
+        return;
+      }
+
+      if (item.page) {
+        return;
+      }
+
+      if (item.text) {
+        const page = item.page || 1;
+        const y = Math.round(Number(item.y || 0) * 100) / 100;
+        const key = `${page}-${y}`;
+
+        if (!rows.has(key)) {
+          rows.set(key, { page, y, items: [] });
+        }
+
+        rows.get(key).items.push({
+          x: Number(item.x || 0),
+          text: String(item.text || '')
+        });
+      }
+    });
+  });
 }
 
 function findLineIndex(lines, regex) {
   return lines.findIndex(line => regex.test(line));
 }
 
-function amountOnOrNearLine(lines, index) {
-  if (index < 0) return 0;
-
-  for (let i = index; i <= Math.min(index + 2, lines.length - 1); i++) {
-    const values = moneyValues(lines[i]).filter(v => v > 0);
-    if (values.length) return round2(values[values.length - 1]);
+function findAmountByLine(lines, regex) {
+  for (const line of lines) {
+    if (regex.test(line)) {
+      const value = lastMoney(line);
+      if (value > 0) return round2(value);
+    }
   }
-
   return 0;
 }
 
-/**
- * Busca la fila final de totales.
- * En estos recibos la lógica es:
- * ... Total Hab. c/Ap. | Total Hab. s/Ap. | Total Desc.
- * antes del bloque "Son Pesos".
- */
-function findTotalsFromBeforeSonPesos(text) {
-  const sonIndex = text.search(/son\s+pesos/i);
-  const part = sonIndex >= 0 ? text.slice(0, sonIndex) : text;
-  const values = moneyValues(part).filter(v => v > 0);
+function findTotalsRow(lines) {
+  let best = null;
 
-  if (values.length >= 3) {
-    const [haberesConAporte, haberesSinAporte, totalDescuentos] = values.slice(-3);
+  for (const line of lines) {
+    const values = moneyValues(line);
 
-    if (haberesConAporte > 100000 && totalDescuentos > 10000) {
-      return {
-        haberesConAporte: round2(haberesConAporte),
-        haberesSinAporte: round2(haberesSinAporte),
-        totalDescuentos: round2(totalDescuentos),
-        source: 'ultimos_3_importes_antes_de_son_pesos'
-      };
+    if (values.length >= 3) {
+      const [haberesConAporte, haberesSinAporte, totalDescuentos] = values.slice(-3);
+
+      if (haberesConAporte > 100000 && totalDescuentos > 10000) {
+        best = {
+          haberesConAporte: round2(haberesConAporte),
+          haberesSinAporte: round2(haberesSinAporte),
+          totalDescuentos: round2(totalDescuentos),
+          raw: line
+        };
+      }
     }
   }
 
-  return null;
+  return best;
 }
 
-/**
- * Fallback para Hab. c/Ap.:
- * suma líneas antes de IPS con código menor a 60000.
- * En recibos municipales/hospital, esos códigos suelen ser remunerativos con aporte:
- * 10000, 12000, 12510, 12512, 12600, 12800, etc.
- *
- * Excluye 61000/62000/62010 porque suelen estar en Hab. s/Ap.
- */
-function sumHaberesConAportePorCodigo(lines) {
+function findHaberesBySummingConcepts(lines) {
   const ipsIndex = findLineIndex(lines, /i\.?\s*p\.?\s*s|ips\s*14/i);
   if (ipsIndex <= 0) return 0;
 
@@ -137,11 +176,11 @@ function sumHaberesConAportePorCodigo(lines) {
   for (let i = 0; i < ipsIndex; i++) {
     const line = lines[i];
 
+    // En los recibos del Hospital/Municipio, los conceptos con código menor a 60000 van en Hab. c/Ap.
     const codeMatch = line.match(/\b(\d{5})\b/);
     if (!codeMatch) continue;
 
     const code = Number(codeMatch[1]);
-
     if (code >= 10000 && code < 60000) {
       const amount = lastMoney(line);
       if (amount > 0) total += amount;
@@ -151,78 +190,70 @@ function sumHaberesConAportePorCodigo(lines) {
   return round2(total);
 }
 
-function extractIps(lines) {
-  const index = findLineIndex(lines, /i\.?\s*p\.?\s*s|ips\s*14/i);
-  return round2(amountOnOrNearLine(lines, index));
-}
-
-function extractIoma(lines) {
-  const index = findLineIndex(lines, /i\.?\s*o\.?\s*m\.?\s*a|ioma/i);
-  return {
-    index,
-    amount: round2(amountOnOrNearLine(lines, index))
-  };
-}
-
-function stopDiscountLine(line) {
+function isStopDiscountLine(line) {
   return /(son\s+pesos|liquido\s+a\s+pagar|líquido\s+a\s+pagar|neto\s+a\s+cobrar|neto|liquido|líquido|firma|recibi|recibí|banco|cuenta|cbu)/i.test(line);
 }
 
-function ignoreDiscountConcept(line) {
-  return /(i\.?\s*p\.?\s*s|ips|i\.?\s*o\.?\s*m\.?\s*a|ioma|total|totales|neto|liquido|líquido|son\s+pesos)/i.test(line);
+function ignoreDiscountLine(line) {
+  return /(i\.?\s*p\.?\s*s|ips|i\.?\s*o\.?\s*m\.?\s*a|ioma|total|totales|neto|liquido|líquido|son\s+pesos|hab\.?\s*c\/ap|haberes)/i.test(line);
 }
 
-function discountsBelowIomaByLines(lines, iomaIndex) {
+function discountsBelowIomaByRows(lines, iomaIndex) {
   if (iomaIndex < 0) return [];
 
-  const out = [];
+  const discounts = [];
 
   for (let i = iomaIndex + 1; i < lines.length; i++) {
-    const line = clean(lines[i]);
+    const line = cleanText(lines[i]);
     if (!line) continue;
-    if (stopDiscountLine(line)) break;
-    if (ignoreDiscountConcept(line)) continue;
+    if (isStopDiscountLine(line)) break;
+    if (ignoreDiscountLine(line)) continue;
 
     const amount = lastMoney(line);
-    if (amount > 0) out.push({ concept: line.replace(MONEY_REGEX, '').trim(), amount: round2(amount), raw: line });
+    if (amount <= 0) continue;
+
+    const concept = line.replace(MONEY_REGEX, '').replace(/\s+/g, ' ').trim() || 'Descuento detectado';
+
+    discounts.push({
+      concept,
+      amount: round2(amount),
+      raw: line
+    });
   }
 
-  return out;
+  return discounts;
 }
 
-function calculateFromText(rawText) {
-  const text = normalize(rawText);
-  const lines = text.split('\n').map(clean).filter(Boolean);
+function calculateFromRows(rows) {
+  const lines = rows.map(cleanText).filter(Boolean);
 
-  const totals = findTotalsFromBeforeSonPesos(text);
-  const haberesPorCodigo = sumHaberesConAportePorCodigo(lines);
+  const totalsRow = findTotalsRow(lines);
 
-  let haberes = totals?.haberesConAporte || 0;
+  const haberesPorTotales = totalsRow?.haberesConAporte || 0;
+  const haberesPorSuma = findHaberesBySummingConcepts(lines);
 
-  // Si la fila de totales no apareció o salió sospechosa, usar suma por código.
+  let haberes = haberesPorTotales;
+  let fuenteHaberes = 'fila_totales';
+
   if (!haberes || haberes < 500000) {
-    haberes = haberesPorCodigo;
+    haberes = haberesPorSuma;
+    fuenteHaberes = 'suma_codigos_menores_60000';
   }
 
-  // Si ambos existen y son razonables, preferir el total del recibo.
-  if (totals?.haberesConAporte > 500000) {
-    haberes = totals.haberesConAporte;
-  }
+  const ips = findAmountByLine(lines, /i\.?\s*p\.?\s*s|ips\s*14/i);
+  const iomaIndex = findLineIndex(lines, /i\.?\s*o\.?\s*m\.?\s*a|ioma/i);
+  const ioma = iomaIndex >= 0 ? round2(lastMoney(lines[iomaIndex])) : 0;
 
-  const ips = extractIps(lines);
-  const iomaData = extractIoma(lines);
-  const ioma = iomaData.amount;
+  const discountsByRows = discountsBelowIomaByRows(lines, iomaIndex);
+  const totalDiscountsByRows = round2(discountsByRows.reduce((acc, item) => acc + item.amount, 0));
 
-  const descuentosLineas = discountsBelowIomaByLines(lines, iomaData.index);
-  const descuentosPorLinea = round2(descuentosLineas.reduce((acc, item) => acc + item.amount, 0));
-
-  let totalDescuentosRecibo = totals?.totalDescuentos || 0;
-  let descuentosDebajoIoma = descuentosPorLinea;
+  let descuentosDebajoIoma = totalDiscountsByRows;
   let fuenteDescuentos = 'lineas_debajo_ioma';
 
-  // Regla exacta cuando está el total de descuentos del recibo.
-  if (totalDescuentosRecibo > 0 && ips > 0 && ioma > 0) {
-    descuentosDebajoIoma = round2(totalDescuentosRecibo - ips - ioma);
+  // Regla blindada cuando existe total de descuentos:
+  // descuentos debajo de IOMA = total descuentos recibo - IPS - IOMA
+  if (totalsRow?.totalDescuentos > 0 && ips > 0 && ioma > 0) {
+    descuentosDebajoIoma = round2(totalsRow.totalDescuentos - ips - ioma);
     fuenteDescuentos = 'total_descuentos_recibo_menos_ips_ioma';
   }
 
@@ -243,22 +274,22 @@ function calculateFromText(rawText) {
     debug: {
       version: VERSION,
       formula: '((Hab. c/Ap. - IPS - IOMA) * 0.75) - descuentos debajo de IOMA',
-      fuente_haberes: totals?.haberesConAporte ? 'total_recibo' : 'suma_codigos_menores_60000',
+      fuente_haberes: fuenteHaberes,
       fuente_descuentos: fuenteDescuentos,
-      totals_row: totals,
+      totals_row: totalsRow,
       resumen: {
         haberes: round2(haberes),
-        haberes_por_codigo: haberesPorCodigo,
+        haberes_por_suma_codigos: haberesPorSuma,
         ips,
         ioma,
         resultado_x: resultadoX,
         base_75: base75,
         total_descuentos: descuentosDebajoIoma,
-        total_descuentos_recibo: totalDescuentosRecibo
+        total_descuentos_recibo: totalsRow?.totalDescuentos || 0
       },
-      descuentos_detectados_por_linea: descuentosLineas,
-      primeras_lineas: lines.slice(0, 40),
-      lineas_cercanas_ioma: lines.slice(Math.max(0, iomaData.index - 4), Math.min(lines.length, iomaData.index + 18))
+      descuentos_detectados_por_filas: discountsByRows,
+      filas_detectadas_preview: lines.slice(0, 80),
+      filas_cercanas_ioma: lines.slice(Math.max(0, iomaIndex - 4), Math.min(lines.length, iomaIndex + 18))
     }
   };
 }
@@ -308,17 +339,16 @@ export default async function handler(req, res) {
     }
 
     const buffer = fs.readFileSync(file.filepath || file.path);
-    const parsed = await pdfParse(buffer);
-    const text = parsed.text || '';
+    const rows = await extractRowsFromPdf(buffer);
 
-    if (!String(text).trim()) {
+    if (!rows.length) {
       return res.status(422).json({
         success: false,
         message: 'El PDF no tiene texto seleccionable. Usá el PDF original, no una foto o escaneo.'
       });
     }
 
-    return res.status(200).json(calculateFromText(text));
+    return res.status(200).json(calculateFromRows(rows));
   } catch (error) {
     return res.status(500).json({
       success: false,
