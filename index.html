@@ -75,7 +75,7 @@
     import * as pdfjsLib from 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.mjs';
     pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.worker.mjs';
 
-    const VERSION = 'pdf-local-v12-global';
+    const VERSION = 'pdf-local-v13-totales-globales';
     const pdfInput = document.getElementById('reciboPdf');
     const btnCalcular = document.getElementById('btnCalcular');
     const alertBox = document.getElementById('alertBox');
@@ -227,17 +227,21 @@
     function findTotalsRow(lines, globalText) {
       let best = null;
 
+      // 1) Intentar detectar una fila completa:
+      // Hab. c/Ap. | Hab. s/Ap. | Desc.
       for (const line of lines) {
         const values = moneyValues(line);
+
         if (values.length >= 3) {
           const [haberesConAporte, haberesSinAporte, totalDescuentos] = values.slice(-3);
-          if (haberesConAporte > 100000 && totalDescuentos > 10000) {
+
+          if (haberesConAporte > 500000 && totalDescuentos > 500000) {
             best = {
               haberesConAporte: round2(haberesConAporte),
               haberesSinAporte: round2(haberesSinAporte),
               totalDescuentos: round2(totalDescuentos),
               raw: line,
-              source: 'fila'
+              source: 'fila_totales'
             };
           }
         }
@@ -245,25 +249,34 @@
 
       if (best) return best;
 
-      // Fallback global: tomar los últimos 3 importes antes de "Son Pesos".
-      const sonIndex = globalText.search(/son\s+pesos/i);
-      const textBeforeSon = sonIndex >= 0 ? globalText.slice(0, sonIndex) : globalText;
-      const values = moneyValues(textBeforeSon).filter(v => v > 0);
+      // 2) Si PDF.js no arma esa fila, buscar el triple de totales en TODO el texto global.
+      // No usamos "antes de Son Pesos" porque algunos PDFs ordenan esa frase antes de los totales.
+      const allValues = moneyValues(globalText).filter(v => v > 0);
+      let candidate = null;
 
-      if (values.length >= 3) {
-        const [haberesConAporte, haberesSinAporte, totalDescuentos] = values.slice(-3);
-        if (haberesConAporte > 100000 && totalDescuentos > 10000) {
-          return {
+      for (let i = 0; i <= allValues.length - 3; i++) {
+        const haberesConAporte = allValues[i];
+        const haberesSinAporte = allValues[i + 1];
+        const totalDescuentos = allValues[i + 2];
+
+        const looksLikeTotals =
+          haberesConAporte > 500000 &&
+          haberesSinAporte > 0 &&
+          totalDescuentos > 500000 &&
+          totalDescuentos !== haberesConAporte;
+
+        if (looksLikeTotals) {
+          candidate = {
             haberesConAporte: round2(haberesConAporte),
             haberesSinAporte: round2(haberesSinAporte),
             totalDescuentos: round2(totalDescuentos),
-            raw: 'últimos 3 importes antes de Son Pesos',
-            source: 'global_antes_son_pesos'
+            raw: `triple global: ${haberesConAporte} | ${haberesSinAporte} | ${totalDescuentos}`,
+            source: 'triple_global_importes'
           };
         }
       }
 
-      return null;
+      return candidate;
     }
 
     function findAmountByCode(lines, globalText, code, fallbackRegex) {
