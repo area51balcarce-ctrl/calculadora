@@ -75,7 +75,7 @@
     import * as pdfjsLib from 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.mjs';
     pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.worker.mjs';
 
-    const VERSION = 'pdf-local-v11';
+    const VERSION = 'pdf-local-v12-global';
     const pdfInput = document.getElementById('reciboPdf');
     const btnCalcular = document.getElementById('btnCalcular');
     const alertBox = document.getElementById('alertBox');
@@ -141,7 +141,8 @@
       return Number.isFinite(n) ? n : 0;
     }
 
-    const MONEY_REGEX = /-?\$?\s*\d[\d.,]*[.,]\d{2}/g;
+    // Más flexible: soporta números con espacios internos si PDF.js separa signos.
+    const MONEY_REGEX = /-?\$?\s*\d[\d\s.,]*[.,]\s*\d{2}/g;
 
     function moneyValues(text) {
       const source = String(text || '');
@@ -169,10 +170,11 @@
       return values.length ? values[values.length - 1] : 0;
     }
 
-    async function extractRowsFromPdf(file) {
+    async function extractRowsAndTextFromPdf(file) {
       const buffer = await file.arrayBuffer();
       const pdf = await pdfjsLib.getDocument({ data: buffer, useSystemFonts: true }).promise;
       const rows = [];
+      const allItems = [];
 
       for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber++) {
         const page = await pdf.getPage(pageNumber);
@@ -187,7 +189,9 @@
           const x = Number(transform[4] || 0);
           const y = Number(transform[5] || 0);
 
-          let row = buckets.find(r => Math.abs(r.y - y) <= 2.4);
+          allItems.push({ page: pageNumber, x, y, text });
+
+          let row = buckets.find(r => Math.abs(r.y - y) <= 3.2);
           if (!row) {
             row = { y, items: [] };
             buckets.push(row);
@@ -205,54 +209,85 @@
           });
       }
 
-      return rows;
+      allItems.sort((a, b) => {
+        if (a.page !== b.page) return a.page - b.page;
+        if (Math.abs(a.y - b.y) > 3.2) return b.y - a.y;
+        return a.x - b.x;
+      });
+
+      const globalText = allItems.map(i => i.text).join(' ').replace(/\s+/g, ' ').trim();
+
+      return { rows, globalText };
     }
 
     function findLine(lines, regex) {
       return lines.find(line => regex.test(line)) || '';
     }
 
-    function findLineIndex(lines, regex) {
-      return lines.findIndex(line => regex.test(line));
-    }
-
-    function findAmountByCode(lines, code, fallbackRegex) {
-      const exact = findLine(lines, new RegExp(`\\b${code}\\b`));
-      if (exact) {
-        const value = lastMoney(exact);
-        if (value > 0) return round2(value);
-      }
-
-      const fallback = findLine(lines, fallbackRegex);
-      if (fallback) {
-        const value = lastMoney(fallback);
-        if (value > 0) return round2(value);
-      }
-
-      return 0;
-    }
-
-    function findTotalsRow(lines) {
+    function findTotalsRow(lines, globalText) {
       let best = null;
 
       for (const line of lines) {
         const values = moneyValues(line);
-
         if (values.length >= 3) {
           const [haberesConAporte, haberesSinAporte, totalDescuentos] = values.slice(-3);
-
           if (haberesConAporte > 100000 && totalDescuentos > 10000) {
             best = {
               haberesConAporte: round2(haberesConAporte),
               haberesSinAporte: round2(haberesSinAporte),
               totalDescuentos: round2(totalDescuentos),
-              raw: line
+              raw: line,
+              source: 'fila'
             };
           }
         }
       }
 
-      return best;
+      if (best) return best;
+
+      // Fallback global: tomar los últimos 3 importes antes de "Son Pesos".
+      const sonIndex = globalText.search(/son\s+pesos/i);
+      const textBeforeSon = sonIndex >= 0 ? globalText.slice(0, sonIndex) : globalText;
+      const values = moneyValues(textBeforeSon).filter(v => v > 0);
+
+      if (values.length >= 3) {
+        const [haberesConAporte, haberesSinAporte, totalDescuentos] = values.slice(-3);
+        if (haberesConAporte > 100000 && totalDescuentos > 10000) {
+          return {
+            haberesConAporte: round2(haberesConAporte),
+            haberesSinAporte: round2(haberesSinAporte),
+            totalDescuentos: round2(totalDescuentos),
+            raw: 'últimos 3 importes antes de Son Pesos',
+            source: 'global_antes_son_pesos'
+          };
+        }
+      }
+
+      return null;
+    }
+
+    function findAmountByCode(lines, globalText, code, fallbackRegex) {
+      const line = findLine(lines, new RegExp(`\\b${code}\\b`));
+      if (line) {
+        const value = lastMoney(line);
+        if (value > 0) return round2(value);
+      }
+
+      const codeIndex = globalText.search(new RegExp(`\\b${code}\\b`));
+      if (codeIndex >= 0) {
+        const slice = globalText.slice(codeIndex, codeIndex + 180);
+        const values = moneyValues(slice).filter(v => v > 0);
+        if (values.length) return round2(values[values.length - 1]);
+      }
+
+      const labelIndex = globalText.search(fallbackRegex);
+      if (labelIndex >= 0) {
+        const slice = globalText.slice(labelIndex, labelIndex + 180);
+        const values = moneyValues(slice).filter(v => v > 0);
+        if (values.length) return round2(values[values.length - 1]);
+      }
+
+      return 0;
     }
 
     function fallbackHaberesByCodes(lines) {
@@ -275,15 +310,15 @@
       return round2(total);
     }
 
-    function calculateFromRows(rows) {
+    function calculateFromPdfData(rows, globalText) {
       const lines = rows.map(cleanText).filter(Boolean);
 
-      const totals = findTotalsRow(lines);
+      const totals = findTotalsRow(lines, globalText);
       const haberes = totals?.haberesConAporte || fallbackHaberesByCodes(lines);
       const totalDescuentosRecibo = totals?.totalDescuentos || 0;
 
-      const ips = findAmountByCode(lines, '70000', /i\.?\s*p\.?\s*s|ips\s*14/i);
-      const ioma = findAmountByCode(lines, '70020', /i\.?\s*o\.?\s*m\.?\s*a|ioma/i);
+      const ips = findAmountByCode(lines, globalText, '70000', /i\.?\s*p\.?\s*s|ips\s*14/i);
+      const ioma = findAmountByCode(lines, globalText, '70020', /i\.?\s*o\.?\s*m\.?\s*a|ioma/i);
 
       if (!haberes || !ips || !ioma || !totalDescuentosRecibo) {
         return {
@@ -298,7 +333,8 @@
             totals,
             ipsLine: findLine(lines, /\b70000\b|i\.?\s*p\.?\s*s|ips\s*14/i),
             iomaLine: findLine(lines, /\b70020\b|i\.?\s*o\.?\s*m\.?\s*a|ioma/i),
-            rowsPreview: lines.slice(0, 80)
+            rowsPreview: lines.slice(0, 120),
+            globalPreview: globalText.slice(0, 3000)
           }
         };
       }
@@ -322,12 +358,7 @@
             total_descuentos: descuentosDebajoIoma,
             total_descuentos_recibo: round2(totalDescuentosRecibo)
           },
-          totals_row: totals,
-          lineas: {
-            ips: findLine(lines, /\b70000\b|i\.?\s*p\.?\s*s|ips\s*14/i),
-            ioma: findLine(lines, /\b70020\b|i\.?\s*o\.?\s*m\.?\s*a|ioma/i),
-            totales: totals?.raw || ''
-          }
+          totals_row: totals
         }
       };
     }
@@ -352,8 +383,8 @@
       resetResult();
 
       try {
-        const rows = await extractRowsFromPdf(file);
-        const result = calculateFromRows(rows);
+        const { rows, globalText } = await extractRowsAndTextFromPdf(file);
+        const result = calculateFromPdfData(rows, globalText);
 
         if (!result.success) {
           console.warn('DEBUG PDF', result.debug);
